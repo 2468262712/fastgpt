@@ -1,208 +1,623 @@
-version: '3.3'
-services:
-  minio:
-    container_name: minio
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    ports:
-      - '9001:9001'
-      - '9000:9000'
-    networks:
-      - fastgpt
-    volumes:
-      - ./minio:/minio_data
-    command: minio server /minio_data --console-address ":9001"
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
-      interval: 30s
-      timeout: 20s
-      retries: 3
-  # milvus
-  milvusEtcd:
-    container_name: milvusEtcd
-    image: quay.io/coreos/etcd:v3.5.5
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    networks:
-      - fastgpt
-    volumes:
-      - ./milvus/etcd:/etcd
-    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
-    healthcheck:
-      test: ['CMD', 'etcdctl', 'endpoint', 'health']
-      interval: 30s
-      timeout: 20s
-      retries: 3
-  milvusStandalone:
-    container_name: milvusStandalone
-    image: milvusdb/milvus:v2.3.0
-    command: ['milvus', 'run', 'standalone']
-    security_opt:
-      - seccomp:unconfined
-    environment:
-      ETCD_ENDPOINTS: milvusEtcd:2379
-      MINIO_ADDRESS: minio:9000
-    networks:
-      - fastgpt
-    ports:
-      - "19530:19530"
-    volumes:
-      - ./milvus/data:/var/lib/milvus
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9091/healthz']
-      interval: 30s
-      start_period: 90s
-      timeout: 20s
-      retries: 3
-    depends_on:
-      - 'milvusEtcd'
-      - 'minio'
-  attu:
-    container_name: attu
-    image: zilliz/attu:latest
-    environment:
-      MILVUS_URL: milvus-standalone:19530
-    ports:
-      - "8010:3000"
-    depends_on:
-      - milvusStandalone
-  mongo:
-    image:  registry.cn-hangzhou.aliyuncs.com/fastgpt/mongo:5.0.18 # 阿里云
-    container_name: mongo
-    restart: always
-    ports:
-      - 27017:27017
-    networks:
-      - fastgpt
-    command: mongod --keyFile /data/mongodb.key --replSet rs0
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=myusername
-      - MONGO_INITDB_ROOT_PASSWORD=mypassword
-    volumes:
-      - ./mongo/data:/data/db
-    entrypoint:
-      - bash
-      - -c
-      - |
-        openssl rand -base64 128 > /data/mongodb.key
-        chmod 400 /data/mongodb.key
-        chown 999:999 /data/mongodb.key
-        echo 'const isInited = rs.status().ok === 1
-        if(!isInited){
-          rs.initiate({
-              _id: "rs0",
-              members: [
-                  { _id: 0, host: "mongo:27017" }
-              ]
-          })
-        }' > /data/initReplicaSet.js
-        # 启动MongoDB服务
-        exec docker-entrypoint.sh "$$@" &
+apiVersion: app.sealos.io/v1
+kind: Instance
+metadata:
+  name: fastgpt-ialuuuws
+  labels:
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+spec:
+  gitRepo: https://github.com/labring/FastGPT
+  templateType: inline
+  categories:
+    - ai
+  title: FastGPT
+  url: https://ai.fastgpt.in/
+  author: Sealos
+  description: >-
+    FastGPT 是一个基于 LLM 大语言模型的知识库问答系统，提供开箱即用的数据处理、模型调用等能力。同时可以通过 Flow
+    可视化进行工作流编排，从而实现复杂的问答场景！
+  readme: https://cdn.jsdelivr.net/gh/labring/FastGPT@main/README.md
+  icon: https://cdn.jsdelivr.net/gh/labring/FastGPT@main/.github/imgs/logo.svg
+  defaults:
+    app_name:
+      type: string
+      value: fastgpt-undefined
+    app_host:
+      type: string
+      value: undefined
+    session_secret:
+      type: string
+      value: undefined
+    root_key:
+      type: string
+      value: undefined
+  inputs:
+    root_password:
+      description: 'root 用户密码，用户名为: root'
+      type: string
+      default: ''
+      required: true
+    base_url:
+      description: API 基础地址，如果需要部署OneAPI，可以部署完再填写该地址
+      type: string
+      default: https://api.openai.com/v1
+      required: true
+    api_key:
+      description: API密钥
+      type: string
+      default: ''
+      required: true
+  deployCount: 4013
 
-        # 等待MongoDB服务启动
-        until mongo -u myusername -p mypassword --authenticationDatabase admin --eval "print('waited for connection')" > /dev/null 2>&1; do
-          echo "Waiting for MongoDB to start..."
-          sleep 2
-        done
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    sealos-db-provider-cr: fastgpt-ialuuuws-mongo
+    app.kubernetes.io/instance: fastgpt-ialuuuws-mongo
+    app.kubernetes.io/managed-by: kbcli
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  name: fastgpt-ialuuuws-mongo
 
-        # 执行初始化副本集的脚本
-        mongo -u myusername -p mypassword --authenticationDatabase admin /data/initReplicaSet.js
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    sealos-db-provider-cr: fastgpt-ialuuuws-pg
+    app.kubernetes.io/instance: fastgpt-ialuuuws-pg
+    app.kubernetes.io/managed-by: kbcli
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  name: fastgpt-ialuuuws-pg
 
-        # 等待docker-entrypoint.sh脚本执行的MongoDB服务进程
-        wait $$!
-  # fastgpt
-  sandbox:
-    container_name: sandbox
-    image: ghcr.io/labring/fastgpt-sandbox:v4.8.4 # git
-    # image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sandbox:v4.8.4 # 阿里云
-    networks:
-      - fastgpt
-    restart: always
-  fastgpt:
-    container_name: fastgpt
-    image: ghcr.io/labring/fastgpt:v4.8.4 # git
-    # image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt:v4.8.4 # 阿里云
-    ports:
-      - 3001:3000
-    networks:
-      - fastgpt
-    depends_on:
-      - mongo
-      - milvusStandalone
-      - sandbox
-    restart: always
-    environment:
-      # root 密码，用户名为: root。如果需要修改 root 密码，直接修改这个环境变量，并重启即可。
-      - DEFAULT_ROOT_PSW=1234
-      # AI模型的API地址哦。务必加 /v1。这里默认填写了OneApi的访问地址。
-      - OPENAI_BASE_URL=http://oneapi:3000/v1
-      # AI模型的API Key。（这里默认填写了OneAPI的快速默认key，测试通后，务必及时修改）
-      - CHAT_API_KEY=sk-ZXmPOdccaxsxWF8M3f27AaD84f9a410a82414a1d9c04C86b
-      # 数据库最大连接数
-      - DB_MAX_LINK=30
-      # 登录凭证密钥
-      - TOKEN_KEY=any
-      # root的密钥，常用于升级时候的初始化请求
-      - ROOT_KEY=root_key
-      # 文件阅读加密
-      - FILE_TOKEN_KEY=filetoken
-      # MongoDB 连接参数. 用户名myusername,密码mypassword。
-      - MONGODB_URI=mongodb://myusername:mypassword@mongo:27017/fastgpt?authSource=admin
-      # zilliz 连接参数
-      - MILVUS_ADDRESS=http://milvusStandalone:19530
-      - MILVUS_TOKEN=none
-      # sandbox 地址
-      - SANDBOX_URL=http://sandbox:3000
-      # 日志等级: debug, info, warn, error
-      - LOG_LEVEL=info
-    volumes:
-      - ./config.json:/app/data/config.json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastgpt-ialuuuws
+  annotations:
+    originImageName: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt:v4.8.6
+    deploy.cloud.sealos.io/minReplicas: '1'
+    deploy.cloud.sealos.io/maxReplicas: '1'
+  labels:
+    cloud.sealos.io/app-deploy-manager: fastgpt-ialuuuws
+    app: fastgpt-ialuuuws
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: fastgpt-ialuuuws
+  template:
+    metadata:
+      labels:
+        app: fastgpt-ialuuuws
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: fastgpt-ialuuuws
+          image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt:v4.8.6
+          env:
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fastgpt-ialuuuws-mongo-conn-credential
+                  key: password
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fastgpt-ialuuuws-pg-conn-credential
+                  key: password
+            - name: DEFAULT_ROOT_PSW
+              value: '1234'
+            - name: OPENAI_BASE_URL
+              value: https://api.openai.com/v1
+            - name: CHAT_API_KEY
+              value: sk-ZXmPOdccaxsxWF8M3f27AaD84f9a410a82414a1d9c04C86b
+            - name: DB_MAX_LINK
+              value: '100'
+            - name: TOKEN_KEY
+              value: axkdwkjo
+            - name: ROOT_KEY
+              value: gtfeqwss}
+            - name: FILE_TOKEN_KEY
+              value: filetoken
+            - name: MONGODB_URI
+              value: >-
+                mongodb://root:$(MONGO_PASSWORD)@fastgpt-ialuuuws-mongo-mongodb.ns-aizpvspb.svc:27017/fastgpt?authSource=admin
+            - name: PG_URL
+              value: >-
+                postgresql://postgres:$(PG_PASSWORD)@fastgpt-ialuuuws-pg-postgresql.ns-aizpvspb.svc:5432/postgres
+            - name: SANDBOX_URL
+              value: >-
+                http://fastgpt-ialuuuws-sandbox.ns-aizpvspb.svc.cluster.local:3000
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          command: []
+          args: []
+          ports:
+            - containerPort: 3000
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: vn-appvn-datavn-configvn-json
+              mountPath: /app/data/config.json
+              subPath: ./app/data/config.json
+      volumes:
+        - name: vn-appvn-datavn-configvn-json
+          configMap:
+            name: fastgpt-ialuuuws
+            items:
+              - key: vn-appvn-datavn-configvn-json
+                path: ./app/data/config.json
 
-  # oneapi
-  mysql:
-    image: mysql:8.0.36
-    container_name: mysql
-    restart: always
-    ports:
-      - 3307:3307
-    networks:
-      - fastgpt
-    command: --default-authentication-plugin=mysql_native_password
-    environment:
-      # 默认root密码，仅首次运行有效
-      MYSQL_ROOT_PASSWORD: oneapimmysql
-      MYSQL_DATABASE: oneapi
-    volumes:
-      - ./mysql:/var/lib/mysql
-  oneapi:
-    container_name: oneapi
-    image: ghcr.io/songquanpeng/one-api:latest
-    ports:
-      - 3002:3000
-    depends_on:
-      - mysql
-    networks:
-      - fastgpt
-    restart: always
-    environment:
-      # mysql 连接参数
-      - SQL_DSN=root:oneapimmysql@tcp(mysql:3306)/oneapi
-      # 登录凭证加密密钥
-      - SESSION_SECRET=oneapikey
-      # 内存缓存
-      - MEMORY_CACHE_ENABLED=true
-      # 启动聚合更新，减少数据交互频率
-      - BATCH_UPDATE_ENABLED=true
-      # 聚合更新时长
-      - BATCH_UPDATE_INTERVAL=10
-      # 初始化的 root 密钥（建议部署完后更改，否则容易泄露）
-      - INITIAL_ROOT_TOKEN=fastgpt
-    volumes:
-      - ./oneapi:/data
-networks:
-  fastgpt:
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fastgpt-ialuuuws
+  labels:
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+data:
+  vn-appvn-datavn-configvn-json: |
+    {
+      "systemEnv": {
+        "openapiPrefix": "fastgpt",
+        "vectorMaxProcess": 15,
+        "qaMaxProcess": 15,
+        "pgHNSWEfSearch": 100,
+        "tokenWorkers": 20
+      },
+      "llmModels": [
+        {
+          "model": "gpt-3.5-turbo",
+          "name": "gpt-3.5-turbo",
+          "maxContext": 16000,
+          "avatar": "/imgs/model/openai.svg",
+          "maxResponse": 4000,
+          "quoteMaxToken": 13000,
+          "maxTemperature": 1.2,
+          "charsPointsPrice": 0,
+          "censor": false,
+          "vision": false,
+          "datasetProcess": true,
+          "usedInClassify": true,
+          "usedInExtractFields": true,
+          "usedInToolCall": true,
+          "usedInQueryExtension": true,
+          "toolChoice": true,
+          "functionCall": true,
+          "customCQPrompt": "",
+          "customExtractPrompt": "",
+          "defaultSystemChatPrompt": "",
+          "defaultConfig": {}
+        },
+        {
+          "model": "gpt-4-0125-preview",
+          "name": "gpt-4-turbo",
+          "avatar": "/imgs/model/openai.svg",
+          "maxContext": 125000,
+          "maxResponse": 4000,
+          "quoteMaxToken": 100000,
+          "maxTemperature": 1.2,
+          "charsPointsPrice": 0,
+          "censor": false,
+          "vision": false,
+          "datasetProcess": false,
+          "usedInClassify": true,
+          "usedInExtractFields": true,
+          "usedInToolCall": true,
+          "usedInQueryExtension": true,
+          "toolChoice": true,
+          "functionCall": false,
+          "customCQPrompt": "",
+          "customExtractPrompt": "",
+          "defaultSystemChatPrompt": "",
+          "defaultConfig": {}
+        },
+        {
+          "model": "gpt-4-vision-preview",
+          "name": "gpt-4-vision",
+          "avatar": "/imgs/model/openai.svg",
+          "maxContext": 128000,
+          "maxResponse": 4000,
+          "quoteMaxToken": 100000,
+          "maxTemperature": 1.2,
+          "charsPointsPrice": 0,
+          "censor": false,
+          "vision": true,
+          "datasetProcess": false,
+          "usedInClassify": false,
+          "usedInExtractFields": false,
+          "usedInToolCall": false,
+          "usedInQueryExtension": false,
+          "toolChoice": true,
+          "functionCall": false,
+          "customCQPrompt": "",
+          "customExtractPrompt": "",
+          "defaultSystemChatPrompt": "",
+          "defaultConfig": {}
+        }
+      ],
+      "vectorModels": [
+        {
+          "model": "text-embedding-3-large",
+          "name": "text-embedding-3-large",
+          "avatar": "/imgs/model/openai.svg",
+          "charsPointsPrice": 0,
+          "defaultToken": 512,
+          "maxToken": 3000,
+          "weight": 100,
+          "dbConfig": {},
+          "queryConfig": {},
+          "defaultConfig": {
+            "dimensions": 1024
+          }
+        },
+        {
+          "model": "text-embedding-3-small",
+          "name": "text-embedding-3-small",
+          "avatar": "/imgs/model/openai.svg",
+          "charsPointsPrice": 0,
+          "defaultToken": 512,
+          "maxToken": 3000,
+          "weight": 100,
+          "dbConfig": {},
+          "queryConfig": {}
+        },
+        {
+          "model": "text-embedding-ada-002",
+          "name": "text-embedding-ada-002",
+          "avatar": "/imgs/model/openai.svg",
+          "charsPointsPrice": 0,
+          "defaultToken": 512,
+          "maxToken": 3000,
+          "weight": 100,
+          "dbConfig": {},
+          "queryConfig": {}
+        }
+      ],
+      "reRankModels": [],
+      "audioSpeechModels": [
+        {
+          "model": "tts-1",
+          "name": "OpenAI TTS1",
+          "charsPointsPrice": 0,
+          "voices": [
+            {
+              "label": "Alloy",
+              "value": "alloy",
+              "bufferId": "openai-Alloy"
+            },
+            {
+              "label": "Echo",
+              "value": "echo",
+              "bufferId": "openai-Echo"
+            },
+            {
+              "label": "Fable",
+              "value": "fable",
+              "bufferId": "openai-Fable"
+            },
+            {
+              "label": "Onyx",
+              "value": "onyx",
+              "bufferId": "openai-Onyx"
+            },
+            {
+              "label": "Nova",
+              "value": "nova",
+              "bufferId": "openai-Nova"
+            },
+            {
+              "label": "Shimmer",
+              "value": "shimmer",
+              "bufferId": "openai-Shimmer"
+            }
+          ]
+        }
+      ],
+      "whisperModel": {
+        "model": "whisper-1",
+        "name": "Whisper1",
+        "charsPointsPrice": 0
+      }
+    }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastgpt-ialuuuws
+  labels:
+    cloud.sealos.io/app-deploy-manager: fastgpt-ialuuuws
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+spec:
+  ports:
+    - port: 3000
+  selector:
+    app: fastgpt-ialuuuws
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fastgpt-ialuuuws
+  labels:
+    cloud.sealos.io/app-deploy-manager: fastgpt-ialuuuws
+    cloud.sealos.io/app-deploy-manager-domain: hdqhsjuv
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/client-body-buffer-size: 64k
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 64k
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '300'
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '300'
+    nginx.ingress.kubernetes.io/server-snippet: |
+      client_header_buffer_size 64k;
+      large_client_header_buffers 4 128k;
+spec:
+  rules:
+    - host: hdqhsjuv.cloud.sealos.io
+      http:
+        paths:
+          - pathType: Prefix
+            path: /
+            backend:
+              service:
+                name: fastgpt-ialuuuws
+                port:
+                  number: 3000
+  tls:
+    - hosts:
+        - hdqhsjuv.cloud.sealos.io
+      secretName: wildcard-cloud-sealos-io-cert
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastgpt-ialuuuws-sandbox
+  labels:
+    cloud.sealos.io/app-deploy-manager: fastgpt-ialuuuws-sandbox
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+spec:
+  ports:
+    - port: 3000
+  selector:
+    app: fastgpt-ialuuuws-sandbox
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastgpt-ialuuuws-sandbox
+  annotations:
+    originImageName: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sandbox:v4.8.6
+    deploy.cloud.sealos.io/minReplicas: '1'
+    deploy.cloud.sealos.io/maxReplicas: '1'
+    deploy.cloud.sealos.io/resize: 0Gi
+  labels:
+    cloud.sealos.io/app-deploy-manager: fastgpt-ialuuuws-sandbox
+    app: fastgpt-ialuuuws-sandbox
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: fastgpt-ialuuuws-sandbox
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: fastgpt-ialuuuws-sandbox
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: fastgpt-ialuuuws-sandbox
+          image: registry.cn-hangzhou.aliyuncs.com/fastgpt/fastgpt-sandbox:v4.8.6
+          env: []
+          resources:
+            requests:
+              cpu: 50m
+              memory: 102Mi
+            limits:
+              cpu: 500m
+              memory: 1024Mi
+          ports:
+            - containerPort: 3000
+          imagePullPolicy: IfNotPresent
+          volumeMounts: []
+      volumes: []
+
+---
+apiVersion: apps.kubeblocks.io/v1alpha1
+kind: Cluster
+metadata:
+  finalizers:
+    - cluster.kubeblocks.io/finalizer
+  labels:
+    clusterdefinition.kubeblocks.io/name: mongodb
+    clusterversion.kubeblocks.io/name: mongodb-5.0
+    sealos-db-provider-cr: fastgpt-ialuuuws-mongo
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  annotations: {}
+  name: fastgpt-ialuuuws-mongo
+  generation: 1
+spec:
+  affinity:
+    nodeLabels: {}
+    podAntiAffinity: Preferred
+    tenancy: SharedNode
+    topologyKeys: []
+  clusterDefinitionRef: mongodb
+  clusterVersionRef: mongodb-5.0
+  backup:
+    enabled: true
+    cronExpression: 0 18 * * *
+    method: backupTool
+    pitrEnabled: false
+    retentionPeriod: 7d
+  componentSpecs:
+    - componentDefRef: mongodb
+      monitor: true
+      name: mongodb
+      replicas: 1
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      serviceAccountName: fastgpt-ialuuuws-mongo
+      volumeClaimTemplates:
+        - name: data
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 5Gi
+            storageClassName: openebs-backup
+  terminationPolicy: Delete
+  tolerations: []
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    sealos-db-provider-cr: fastgpt-ialuuuws-mongo
+    app.kubernetes.io/instance: fastgpt-ialuuuws-mongo
+    app.kubernetes.io/managed-by: kbcli
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  name: fastgpt-ialuuuws-mongo
+rules:
+  - apiGroups:
+      - '*'
+    resources:
+      - '*'
+    verbs:
+      - '*'
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    sealos-db-provider-cr: fastgpt-ialuuuws-mongo
+    app.kubernetes.io/instance: fastgpt-ialuuuws-mongo
+    app.kubernetes.io/managed-by: kbcli
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  name: fastgpt-ialuuuws-mongo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fastgpt-ialuuuws-mongo
+subjects:
+  - kind: ServiceAccount
+    name: fastgpt-ialuuuws-mongo
+
+---
+apiVersion: apps.kubeblocks.io/v1alpha1
+kind: Cluster
+metadata:
+  finalizers:
+    - cluster.kubeblocks.io/finalizer
+  labels:
+    clusterdefinition.kubeblocks.io/name: postgresql
+    clusterversion.kubeblocks.io/name: postgresql-14.8.0
+    sealos-db-provider-cr: fastgpt-ialuuuws-pg
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  annotations: {}
+  name: fastgpt-ialuuuws-pg
+spec:
+  affinity:
+    nodeLabels: {}
+    podAntiAffinity: Preferred
+    tenancy: SharedNode
+    topologyKeys: []
+  clusterDefinitionRef: postgresql
+  clusterVersionRef: postgresql-14.8.0
+  backup:
+    enabled: true
+    cronExpression: 0 18 * * *
+    method: backupTool
+    pitrEnabled: false
+    retentionPeriod: 7d
+  componentSpecs:
+    - componentDefRef: postgresql
+      monitor: true
+      name: postgresql
+      replicas: 1
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      serviceAccountName: fastgpt-ialuuuws-pg
+      switchPolicy:
+        type: Noop
+      volumeClaimTemplates:
+        - name: data
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 5Gi
+            storageClassName: openebs-backup
+  terminationPolicy: Delete
+  tolerations: []
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    sealos-db-provider-cr: fastgpt-ialuuuws-pg
+    app.kubernetes.io/instance: fastgpt-ialuuuws-pg
+    app.kubernetes.io/managed-by: kbcli
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  name: fastgpt-ialuuuws-pg
+rules:
+  - apiGroups:
+      - '*'
+    resources:
+      - '*'
+    verbs:
+      - '*'
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    sealos-db-provider-cr: fastgpt-ialuuuws-pg
+    app.kubernetes.io/instance: fastgpt-ialuuuws-pg
+    app.kubernetes.io/managed-by: kbcli
+    cloud.sealos.io/deploy-on-sealos: fastgpt-ialuuuws
+  name: fastgpt-ialuuuws-pg
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fastgpt-ialuuuws-pg
+subjects:
+  - kind: ServiceAccount
+    name: fastgpt-ialuuuws-pg
