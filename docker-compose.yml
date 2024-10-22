@@ -82,7 +82,7 @@ services:
     # image: ghcr.io/labring/fastgpt:v4.8.3 # git
     image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:v12 # 阿里云
     ports:
-      - 3020:3000
+      - 3010:3000
     networks:
       - fastgpt
     depends_on:
@@ -134,7 +134,7 @@ services:
     container_name: oneapi
     image: ghcr.io/songquanpeng/one-api:latest
     ports:
-      - 3010:3000
+      - 3002:3000
     depends_on:
       - mysql
     networks:
