@@ -2,7 +2,7 @@ version: '3.3'
 services:
   # oneapi
   mysql:
-    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb/mysql
+    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:mysql
     container_name: IMmysql
     restart: always
     ports:
