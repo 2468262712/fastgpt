@@ -4,7 +4,7 @@ services:
     image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:pg
     container_name: pg
     restart: always
-    ports: 
+    ports:
       - 5432:5432
     networks:
       - fastgpt
@@ -62,13 +62,13 @@ services:
   # fastgpt
   sandbox:
     container_name: sandbox
-    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:v12.4 
+    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:v12.4
     networks:
       - fastgpt
     restart: always
   fastgpt:
     container_name: fastgpt
-    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:v12.4 
+    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb:v12.4
     ports:
       - 3010:3000
     networks:
