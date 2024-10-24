@@ -1,0 +1,20 @@
+version: '3.3'
+services:
+  # oneapi
+  mysql:
+    image: registry.cn-hangzhou.aliyuncs.com/lanbu/lb/mysql
+    container_name: IMmysql
+    restart: always
+    ports:
+      - 3309:3306
+    networks:
+      - fastgpt
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      # 默认root密码，仅首次运行有效
+      MYSQL_ROOT_PASSWORD: oneapimmysql
+      MYSQL_DATABASE: oneapi
+    volumes:
+      - ./mysql:/var/lib/mysql
+networks:
+  fastgpt:
